@@ -169,14 +169,21 @@ func isJSONSchema(fl validator.FieldLevel) bool {
 		schemaMap = toolSchemaMap
 	}
 
-	// validate root schema must be object type
-	rootType, ok := schemaMap["type"].(string)
+	// Create a deep copy of the schema map immediately to avoid concurrent map access issues
+	// when the gojsonschema library marshals the map to JSON
+	schemaMapCopy := make(map[string]any)
+	for k, v := range schemaMap {
+		schemaMapCopy[k] = deepCopyValue(v)
+	}
+
+	// validate root schema must be object type - use the copy
+	rootType, ok := schemaMapCopy["type"].(string)
 	if !ok || rootType != "object" {
 		return false
 	}
 
-	// validate properties
-	properties, ok := schemaMap["properties"].(map[string]any)
+	// validate properties - use the copy
+	properties, ok := schemaMapCopy["properties"].(map[string]any)
 	if !ok {
 		return false
 	}
@@ -189,12 +196,44 @@ func isJSONSchema(fl validator.FieldLevel) bool {
 		}
 	}
 
-	_, err := gojsonschema.NewSchema(gojsonschema.NewGoLoader(fl.Field().Interface()))
+	_, err := gojsonschema.NewSchema(gojsonschema.NewGoLoader(schemaMapCopy))
 	if err != nil {
 		return false
 	}
 
 	return err == nil
+}
+
+// deepCopyValue creates a deep copy of a value to prevent concurrent map access issues
+func deepCopyValue(value any) any {
+	if value == nil {
+		return nil
+	}
+	
+	switch v := value.(type) {
+	case map[string]any:
+		copy := make(map[string]any)
+		for k, val := range v {
+			copy[k] = deepCopyValue(val)
+		}
+		return copy
+	case []any:
+		copy := make([]any, len(v))
+		for i, val := range v {
+			copy[i] = deepCopyValue(val)
+		}
+		return copy
+	case map[any]any:
+		copy := make(map[any]any)
+		for k, val := range v {
+			copy[deepCopyValue(k)] = deepCopyValue(val)
+		}
+		return copy
+	default:
+		// For basic types (string, int, float64, bool, etc.), return as-is
+		// These are copied by value in Go
+		return value
+	}
 }
 
 func init() {
